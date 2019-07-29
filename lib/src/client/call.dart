@@ -17,7 +17,7 @@ import 'dart:async';
 
 import '../shared/message.dart';
 import '../shared/status.dart';
-
+import 'client_interceptor.dart';
 import 'common.dart';
 import 'connection.dart';
 import 'method.dart';
@@ -62,8 +62,8 @@ class CallOptions {
       {Map<String, String> metadata,
       Duration timeout,
       List<MetadataProvider> providers}) {
-    return CallOptions._(Map.unmodifiable(metadata ?? {}), timeout,
-        List.unmodifiable(providers ?? []));
+    return CallOptions._(
+        Map.from(metadata ?? {}), timeout, List.unmodifiable(providers ?? []));
   }
 
   factory CallOptions.from(Iterable<CallOptions> options) =>
@@ -75,7 +75,7 @@ class CallOptions {
     final mergedTimeout = other.timeout ?? timeout;
     final mergedProviders = List.from(metadataProviders)
       ..addAll(other.metadataProviders);
-    return CallOptions._(Map.unmodifiable(mergedMetadata), mergedTimeout,
+    return CallOptions._(Map.from(mergedMetadata), mergedTimeout,
         List.unmodifiable(mergedProviders));
   }
 }
@@ -100,7 +100,16 @@ class ClientCall<Q, R> implements Response {
   bool isCancelled = false;
   Timer _timeoutTimer;
 
-  ClientCall(this._method, this._requests, this.options) {
+  List<ClientOutboundInterceptor> _outboundInterceptors;
+
+  // TODO
+  List<ClientInboundInterceptor> _inboundInterceptors;
+
+  ClientCall(this._method, this._requests, this.options,
+      {List<ClientOutboundInterceptor> outboundInterceptors,
+      List<ClientInboundInterceptor> inboundInterceptors})
+      : _outboundInterceptors = outboundInterceptors,
+        _inboundInterceptors = inboundInterceptors {
     _responses = StreamController(onListen: _onResponseListen);
     if (options.timeout != null) {
       _timeoutTimer = Timer(options.timeout, _onTimedOut);
@@ -130,7 +139,6 @@ class ClientCall<Q, R> implements Response {
     return sanitizedMetadata;
   }
 
-
 // TODO(sigurdm): Find out why we do this.
   static String audiencePath(ClientMethod method) {
     final lastSlashPos = method.path.lastIndexOf('/');
@@ -139,9 +147,14 @@ class ClientCall<Q, R> implements Response {
         : method.path.substring(0, lastSlashPos);
   }
 
-
-  void onConnectionReady(ClientConnection connection) {
+  void onConnectionReady(ClientConnection connection) async {
     if (isCancelled) return;
+
+    final error = await _applyInterceptors();
+    if (error != null) {
+      _responseError(
+          GrpcError.internal("Interceptor error " + error.toString()));
+    }
 
     if (options.metadataProviders.isEmpty) {
       _sendRequest(connection, _sanitizeMetadata(options.metadata));
@@ -149,11 +162,26 @@ class ClientCall<Q, R> implements Response {
       final metadata = Map<String, String>.from(options.metadata);
       Future.forEach(
               options.metadataProviders,
-              (provider) => provider(
-                  metadata, '${connection.scheme}://${connection.authority}${audiencePath(_method)}'))
+              (provider) => provider(metadata,
+                  '${connection.scheme}://${connection.authority}${audiencePath(_method)}'))
           .then((_) => _sendRequest(connection, _sanitizeMetadata(metadata)))
           .catchError(_onMetadataProviderError);
     }
+  }
+
+  Future<GrpcError> _applyInterceptors() async {
+    try {
+      for (final interceptor in _outboundInterceptors) {
+        final error = await interceptor(_method, _requests, options);
+        if (error != null) {
+          return error;
+        }
+      }
+    } catch (exception) {
+      final grpcError = GrpcError.internal(exception.toString());
+      return grpcError;
+    }
+    return null;
   }
 
   void _onMetadataProviderError(error) {

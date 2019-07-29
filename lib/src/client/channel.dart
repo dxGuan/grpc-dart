@@ -16,8 +16,8 @@
 import 'dart:async';
 
 import '../shared/status.dart';
-
 import 'call.dart';
+import 'client_interceptor.dart';
 import 'connection.dart';
 import 'method.dart';
 
@@ -47,7 +47,16 @@ abstract class ClientChannelBase implements ClientChannel {
 
   bool _isShutdown = false;
 
-  ClientChannelBase();
+  List<ClientOutboundInterceptor> _outboundInterceptors;
+  List<ClientInboundInterceptor> _inboundInterceptors;
+
+  ClientChannelBase(
+      {List<ClientOutboundInterceptor> outboundInterceptors,
+      List<ClientInboundInterceptor> inboundInterceptors})
+      : _outboundInterceptors =
+            outboundInterceptors ?? const <ClientOutboundInterceptor>[],
+        _inboundInterceptors =
+            inboundInterceptors ?? const <ClientInboundInterceptor>[];
 
   @override
   Future<void> shutdown() async {
@@ -75,7 +84,9 @@ abstract class ClientChannelBase implements ClientChannel {
   @override
   ClientCall<Q, R> createCall<Q, R>(
       ClientMethod<Q, R> method, Stream<Q> requests, CallOptions options) {
-    final call = ClientCall(method, requests, options);
+    final call = ClientCall(method, requests, options,
+        outboundInterceptors: _outboundInterceptors,
+        inboundInterceptors: _inboundInterceptors);
     getConnection().then((connection) {
       if (call.isCancelled) return;
       connection.dispatchCall(call);

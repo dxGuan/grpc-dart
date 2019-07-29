@@ -14,6 +14,7 @@
 // limitations under the License.
 
 import 'channel.dart';
+import 'client_interceptor.dart';
 import 'connection.dart';
 import 'http2_connection.dart' show Http2ClientConnection;
 import 'options.dart';
@@ -28,9 +29,15 @@ class ClientChannel extends ClientChannelBase {
   final int port;
   final ChannelOptions options;
 
-  ClientChannel(this.host,
-      {this.port = 443, this.options = const ChannelOptions()})
-      : super();
+  ClientChannel(
+    this.host, {
+    this.port = 443,
+    this.options = const ChannelOptions(),
+    List<ClientOutboundInterceptor> outboundInterceptors,
+    List<ClientInboundInterceptor> inboundInterceptors,
+  }) : super(
+            outboundInterceptors: outboundInterceptors,
+            inboundInterceptors: inboundInterceptors);
 
   @override
   ClientConnection createConnection() {
